@@ -66,21 +66,25 @@ Spectrogram {
 					var yStep = imgHeight / fftDataArray.size;
 					// "do workaround drawFunc_".postln; // TODO:
 
-					Pen.width = 1;
+
 
 					Pen.beginPath;
 
+					Pen.width = 0.5;
 					// show where we are with a red line
-					if ( (index % imgWidth) < (imgWidth - 1),
+					if ( (index % imgWidth) < (imgWidth - 2),
 						{
 							var col = Color.red;
+							var yOffset = 1;
 							Pen.strokeColor = col;
-							Pen.moveTo(Point(x+2 , 0 ));
-							Pen.lineTo(Point(x+2 , imgHeight-1 ));
+							Pen.moveTo(Point(x+1.5 , yOffset ));
+							Pen.lineTo(Point(x+1.5 , imgHeight-yOffset ));
 							Pen.stroke;
 
 						}
 					);
+
+					Pen.width = 1;
 
 					fftDataArray.do {|val,i|
 						var valNrm = val/255.0;

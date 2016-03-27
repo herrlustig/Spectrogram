@@ -13,6 +13,11 @@ Spectrogram {
 	var userview, mouseX, mouseY, freq, drawCrossHair = false; // mYIndex, mXIndex, freq;
 	var crosshaircolor, running;
 	var doWorkaroundForImage=true;
+	var <controlBusMfcc, mfccDataArray, mfccSize=13;
+	// configs
+	var <>penWidth=2;
+	var <>colorFFT;
+	var <>colorMFCC;
 
 	*new { arg parent, bounds, bufSize, color, background, lowfreq=0, highfreq=inf;
 		^super.new.initSpectrogram(parent, bounds, bufSize, color, background, lowfreq, highfreq);
@@ -23,7 +28,12 @@ Spectrogram {
 		inbus = 0;
 		rate = 25; // updates per second
 		bufSize = bufSizearg ? 1024; // fft window
+
+		colorFFT = colorFFT ? Color.red;
+		colorMFCC = colorMFCC ? Color.yellow;
 		fftbuf = Buffer.alloc(server, bufSize);
+		controlBusMfcc = Bus.new('control', 0, mfccSize);
+
 		//binfreqs = bufSize.collect({|i| ((server.sampleRate/2)/bufSize)*(i+1)});
 		binfreqs = bufSize.collect({|i| ((44100/2)/bufSize)*(i+1)});
 		index = 0;
@@ -34,6 +44,7 @@ Spectrogram {
 		tobin = min(binfreqs.indexOf((highfreqarg/2).nearestInList(binfreqs)), bufSize.div(2) - 1);
 		frombin = max(binfreqs.indexOf((lowfreqarg/2).nearestInList(binfreqs)), 0);
 		fftDataArray = Int32Array.fill((tobin - frombin + 1), 0);
+		mfccDataArray = FloatArray.fill(mfccSize, 0.0);
 		running = false;
 		this.sendSynthDef;
 		this.createWin(parent, boundsarg);
@@ -49,6 +60,7 @@ Spectrogram {
 			image.free;
 			this.stopruntask;
 			fftbuf.free;
+			controlBusMfcc.free;
 		}).front;
 	}
 
@@ -61,49 +73,84 @@ Spectrogram {
 			Pen.use {
 				Pen.scale( b.width / imgWidth, b.height / imgHeight );
 				//Pen.image( image );
-				if (doWorkaroundForImage, {
-					var x = index%imgWidth;
-					var yStep = imgHeight / fftDataArray.size;
-					// "do workaround drawFunc_".postln; // TODO:
+				if (doWorkaroundForImage,
+					{
+						var x = index%imgWidth;
+						var yStep = imgHeight / fftDataArray.size;
+						var yStepMfcc = imgHeight / mfccDataArray.size;
+						// "do workaround drawFunc_".postln; // TODO:
 
+						Pen.beginPath;
 
+						Pen.width = penWidth;
+						// bg
+						if ( (index % imgWidth) < (imgWidth - 0),
+							{
+								var col = Color.black;
+								var yOffset = 0;
+								Pen.strokeColor = col;
+								Pen.moveTo(Point(x , yOffset ));
+								Pen.lineTo(Point(x , imgHeight-yOffset ));
+								Pen.stroke;
 
-					Pen.beginPath;
+							}
+						);
 
-					Pen.width = 0.5;
-					// show where we are with a red line
-					if ( (index % imgWidth) < (imgWidth - 2),
-						{
-							var col = Color.red;
-							var yOffset = 1;
+						Pen.width = penWidth/2;
+						// show where we are with a line
+						if ( (index % imgWidth) < (imgWidth - 2),
+							{
+								var col = Color.green;
+								var yOffset = 1;
+								Pen.strokeColor = col;
+								Pen.moveTo(Point(x+2 , yOffset ));
+								Pen.lineTo(Point(x+2 , imgHeight-yOffset ));
+								Pen.stroke;
+
+							}
+						);
+
+						Pen.width = penWidth;
+
+						mfccDataArray.do {|val,i|
+							var valNrm = val/2;
+							var alpha = 0.5;
+							var col = colorMFCC;
+							col.alpha = valNrm;
+
+							// [val, valNrm, i].postln;
+
 							Pen.strokeColor = col;
-							Pen.moveTo(Point(x+1.5 , yOffset ));
-							Pen.lineTo(Point(x+1.5 , imgHeight-yOffset ));
+
+							Pen.moveTo(Point(x , yStepMfcc * (i) ));
+							Pen.lineTo(Point(x , yStepMfcc * (i+1) ));
 							Pen.stroke;
 
-						}
-					);
+						};
 
-					Pen.width = 1;
+						fftDataArray.do {|val,i|
+							var valNrm = val/255.0;
+							var col = colorFFT;
+							// col = col.blend(Color.white,valNrm*0.5); // brighten up
+							col.alpha = valNrm; // TODO: easing ... easeOutCirc ? log ?
 
-					fftDataArray.do {|val,i|
-						var valNrm = val/255.0;
-						var col = Color.blue(val/255.0,1);
-						col = col.blend(Color.white,val/255.0*0.5); // brighten up
-						if (val <= 0, {col = Color.black });
+							if (val <= 0, {col.alpha = 0 });
 
 
-						Pen.strokeColor = col;
+							Pen.strokeColor = col;
 
-						Pen.moveTo(Point(x , yStep*i ));
-						Pen.lineTo(Point(x , yStep+1*i ));
-						Pen.stroke;
+							Pen.moveTo(Point(x , yStep * i ));
+							Pen.lineTo(Point(x , yStep * (i+1) ));
+							Pen.stroke;
 
-					}
+						};
+
+
 
 					} , {
 						image.drawAtPoint(0@0);
-				})
+					}
+				)
 			};
 
 			//Pen.drawImage(window, image, Rect(0, 0, b.width , b.height ));
@@ -142,8 +189,15 @@ Spectrogram {
 	}
 
 	sendSynthDef {
-		SynthDef(\spectroscope, {|inbus=0, buffer=0|
-			FFT(buffer, InFeedback.ar(inbus));
+		SynthDef(\spectroscope, {|inbus=0, buffer=0, controlBusMfcc=1, mfccSize=13|
+			var fft, array;
+			fft = FFT(buffer, InFeedback.ar(inbus));
+
+			// mfcc
+			array = MFCC.kr(fft, 13); // TODO dynamic mfcc's
+			Out.kr(controlBusMfcc, array);
+
+
 		}).add;
 	}
 
@@ -153,7 +207,7 @@ Spectrogram {
 		this.recalcGradient;
 		{
 			runtask = Task({
-				fftSynth = Synth(\spectroscope, [\inbus, inbus, \buffer, fftbuf]);
+				fftSynth = Synth(\spectroscope, [\inbus, inbus, \buffer, fftbuf, \controlBusMfcc, controlBusMfcc, \mfccSize, mfccSize]);
 				{
 					fftbuf.getn(0, bufSize,
 					{ arg buf;
@@ -205,6 +259,14 @@ Spectrogram {
 							if( userview.notClosed, { userview.refresh });
 						}.defer;
 					});
+
+					// mfcc
+					controlBusMfcc.getn( mfccSize, { |val|
+						// ["MFCC output:", val].postln;
+						mfccDataArray = val;
+						}
+					);
+
 					rate.reciprocal.wait; // framerate
 				}.loop;
 			}).start;

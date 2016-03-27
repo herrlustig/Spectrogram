@@ -12,6 +12,7 @@ Spectrogram {
 	var color, background, colints; // colints is an array of integers each representing a color
 	var userview, mouseX, mouseY, freq, drawCrossHair = false; // mYIndex, mXIndex, freq;
 	var crosshaircolor, running;
+	var doWorkaroundForImage=true;
 
 	*new { arg parent, bounds, bufSize, color, background, lowfreq=0, highfreq=inf;
 		^super.new.initSpectrogram(parent, bounds, bufSize, color, background, lowfreq, highfreq);
@@ -53,45 +54,87 @@ Spectrogram {
 
 	setUserView {arg window, bounds;
 		userview = UserView(window, bounds)
-			.focusColor_(Color.white.alpha_(0))
-			.resize_(5)
-			.drawFunc_({arg view;
-				var b = view.bounds;
-				Pen.use {
-					Pen.scale( b.width / imgWidth, b.height / imgHeight );
-					//Pen.image( image );
-					image.drawAtPoint(0@0);
-				};
+		.focusColor_(Color.white.alpha_(0))
+		.resize_(5)
+		.drawFunc_({arg view;
+			var b = view.bounds;
+			Pen.use {
+				Pen.scale( b.width / imgWidth, b.height / imgHeight );
+				//Pen.image( image );
+				if (doWorkaroundForImage, {
+					var x = index%imgWidth;
+					var yStep = imgHeight / fftDataArray.size;
+					// "do workaround drawFunc_".postln; // TODO:
 
-				//Pen.drawImage(window, image, Rect(0, 0, b.width , b.height ));
-				//Pen.stroke;
-				//window.view.backgroundImage = image;
-				//window.view.setBackgroundImage(image, 10, 1, Rect(0, 0, b.width , b.height ));
-				
-				if( drawCrossHair, {
-					Pen.color = crosshaircolor;
-					Pen.addRect( b.moveTo( 0, 0 ));
-					Pen.clip;
-					Pen.line( 0@mouseY, b.width@mouseY);
-					Pen.line(mouseX @ 0, mouseX @ b.height);
-					Pen.font = Font( "Helvetica", 10 );
-					Pen.stringAtPoint( "freq: "+freq.asString, mouseX + 20 @ mouseY - 15);
-					Pen.stroke;
-				});
-			})
-			.mouseDownAction_({|view, mx, my|
-				this.crosshairCalcFunc(view, mx, my);
-				drawCrossHair = true;
-				view.refresh;
-			})
-			.mouseMoveAction_({|view, mx, my|
-				this.crosshairCalcFunc(view, mx, my);
-				view.refresh;
-			})
-			.mouseUpAction_({|view, mx, my|
-				drawCrossHair = false;
-				view.refresh;
+					Pen.width = 1;
+
+					Pen.beginPath;
+
+					// show where we are with a red line
+					if ( (index % imgWidth) < (imgWidth - 1),
+						{
+							var col = Color.red;
+							Pen.strokeColor = col;
+							Pen.moveTo(Point(x+2 , 0 ));
+							Pen.lineTo(Point(x+2 , imgHeight-1 ));
+							Pen.stroke;
+
+						}
+					);
+
+					fftDataArray.do {|val,i|
+						var valNrm = val/255.0;
+						var col = Color.blue(val/255.0,1);
+						col = col.blend(Color.white,val/255.0*0.5); // brighten up
+						if (val <= 0, {col = Color.black });
+
+
+						Pen.strokeColor = col;
+
+						Pen.moveTo(Point(x , yStep*i ));
+						Pen.lineTo(Point(x , yStep+1*i ));
+						Pen.stroke;
+
+					}
+
+					} , {
+						image.drawAtPoint(0@0);
+				})
+			};
+
+			//Pen.drawImage(window, image, Rect(0, 0, b.width , b.height ));
+			//Pen.stroke;
+			//window.view.backgroundImage = image;
+			//window.view.setBackgroundImage(image, 10, 1, Rect(0, 0, b.width , b.height ));
+
+			if( drawCrossHair, {
+				Pen.color = crosshaircolor;
+				Pen.addRect( b.moveTo( 0, 0 ));
+				Pen.clip;
+				Pen.line( 0@mouseY, b.width@mouseY);
+				Pen.line(mouseX @ 0, mouseX @ b.height);
+				Pen.font = Font( "Helvetica", 10 );
+				Pen.stringAtPoint( "freq: "+freq.asString, mouseX + 20 @ mouseY - 15);
+				Pen.stroke;
 			});
+		})
+		.mouseDownAction_({|view, mx, my|
+			this.crosshairCalcFunc(view, mx, my);
+			drawCrossHair = true;
+			view.refresh;
+		})
+		.mouseMoveAction_({|view, mx, my|
+			this.crosshairCalcFunc(view, mx, my);
+			view.refresh;
+		})
+		.mouseUpAction_({|view, mx, my|
+			drawCrossHair = false;
+			view.refresh;
+		});
+
+		if (doWorkaroundForImage, {
+			userview.clearOnRefresh_(false)
+		});
 	}
 
 	sendSynthDef {
@@ -142,10 +185,18 @@ Spectrogram {
 
 						complexarray.do({|val, i|
 							val = val * intensity;
-							fftDataArray[i] = colints.clipAt((val/16).round);
+							// fftDataArray[i] = colints.clipAt((val/16).round); // TODO: fix
+								fftDataArray[i] = (val).round.asInteger; // workaround
 						});
 						{
-							image.setPixels(fftDataArray, Rect(index%imgWidth, 0, 1, (tobin - frombin + 1)));
+							if (doWorkaroundForImage,
+									{
+										// "do workaround in task loop".postln;
+									},
+									{
+										image.setPixels(fftDataArray, Rect(index%imgWidth, 0, 1, (tobin - frombin + 1)));
+									}
+								);
 							index = index + 1;
 							if( userview.notClosed, { userview.refresh });
 						}.defer;
@@ -185,7 +236,12 @@ Spectrogram {
 		if( image.notNil, { image.free });
 		imgWidth = width;
 		imgHeight = (tobin - frombin + 1); // bufSize.div(2);
-		image = Image.color(imgWidth.asInt, imgHeight.asInt, background);
+		if (doWorkaroundForImage,
+			{ }, // else
+			{
+				image = Image.color(imgWidth.asInt, imgHeight.asInt, background);
+			}
+		)
 	}
 
 	setBufSize_ {arg buffersize, restart=true;
@@ -207,7 +263,14 @@ Spectrogram {
 	recalcGradient {
 		var colors;
 		colors = (0..16).collect({|val| blend(background, color, val/16)});
-		colints = colors.collect({|col| Image.colorToPixel( col )});
+		if (doWorkaroundForImage,
+			{
+				"doWorkaroundForImage in recalcGradient".postln; // FIXME:
+			},
+			{
+				colints = colors.collect({|col| Image.colorToPixel( col )});
+			}
+		)
 	}
 
 	crosshairColor_{arg argcolor;
